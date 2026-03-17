@@ -126,13 +126,20 @@ if uploaded_files:
     st.subheader("Extracted Data")
     st.dataframe(final_df)
 
+    from io import BytesIO
+
     col1, col2 = st.columns(2)
 
     with col1:
+        output = BytesIO()
+        final_df.to_excel(output, index=False, engine='openpyxl')
+        output.seek(0)
+
         st.download_button(
             "Download Excel",
-            final_df.to_excel(index=False),
-            "EQAS_Extract.xlsx"
+            data=output,
+            file_name="EQAS_Extract.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     with col2:
