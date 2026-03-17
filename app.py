@@ -92,27 +92,63 @@ def extract_metrics(text):
     return records
 
 
-def extract_all(pdf):
-    final = []
+def extract_all(file):
+    records = []
 
-    with pdfplumber.open(pdf) as pdf_file:
-        for page in pdf_file.pages:
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
             text = page.extract_text()
+
             if not text:
                 continue
 
-            info = extract_lab_info(text)
-            metrics = extract_metrics(text)
+            # -------------------------
+            # 1. Detect analyte (top of page)
+            # -------------------------
+            lines = text.split("\n")
+            analyte = None
 
-            for m in metrics:
-                final.append({
-                    "Lab": info["Lab"],
-                    "Cycle": info["Cycle"],
-                    "Sample": info["Sample"],
-                    **m
+            for line in lines[:10]:
+                if (
+                    len(line) < 50
+                    and not re.search(r"\d", line)
+                    and "report" in line.lower()
+                ):
+                    analyte = line.replace("Report", "").strip()
+                    break
+
+            # -------------------------
+            # 2. Extract result
+            # -------------------------
+            result_match = re.search(r"Your Result\s+([\d\.]+)", text)
+            result = float(result_match.group(1)) if result_match else None
+
+            # -------------------------
+            # 3. Extract peer values
+            # -------------------------
+            peer_match = re.search(
+                r"Your Peer\s+\d+\s+([\d\.]+)\s+([\d\.]+).*?([\-\d\.]+)\s+([\-\d\.]+)",
+                text,
+                re.DOTALL
+            )
+
+            peer_mean = float(peer_match.group(1)) if peer_match else None
+            peer_sd = float(peer_match.group(2)) if peer_match else None
+            rmz = float(peer_match.group(4)) if peer_match else None
+
+            # -------------------------
+            # 4. Save
+            # -------------------------
+            if analyte and result:
+                records.append({
+                    "Analyte": analyte,
+                    "Result": result,
+                    "Peer Mean": peer_mean,
+                    "Peer SD": peer_sd,
+                    "RMZ": rmz
                 })
 
-    return pd.DataFrame(final)
+    return pd.DataFrame(records)
 
 
 def upload_to_gsheets(df):
