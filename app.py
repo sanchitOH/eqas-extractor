@@ -102,8 +102,11 @@ def extract_all(file):
             if not text:
                 continue
 
+            # ✅ Extract lab info FIRST
+            lab_info = extract_lab_info(text)
+
             # -------------------------
-            # 1. Detect analyte (top of page)
+            # 1. Detect analyte
             # -------------------------
             lines = text.split("\n")
             analyte = None
@@ -114,7 +117,7 @@ def extract_all(file):
                     and not re.search(r"\d", line)
                     and "report" in line.lower()
                 ):
-                    analyte = line.replace("Report", "").strip()
+                    analyte = clean_analyte_name(line.replace("Report", ""))
                     break
 
             # -------------------------
@@ -137,10 +140,13 @@ def extract_all(file):
             rmz = float(peer_match.group(4)) if peer_match else None
 
             # -------------------------
-            # 4. Save
+            # 4. Save (MERGED DATA)
             # -------------------------
             if analyte and result:
                 records.append({
+                    "Lab": lab_info["Lab"],
+                    "Cycle": lab_info["Cycle"],
+                    "Sample": lab_info["Sample"],
                     "Analyte": analyte,
                     "Result": result,
                     "Peer Mean": peer_mean,
