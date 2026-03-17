@@ -28,69 +28,6 @@ def clean_analyte_name(name):
     return name.strip()
 
 
-def extract_metrics(text):
-    records = []
-
-    # Split into sections using "Your Result"
-    sections = re.split(r"Your Result", text, flags=re.IGNORECASE)
-
-    for section in sections[1:]:  # skip first junk part
-        try:
-            # -------------------------
-            # 1. Extract RESULT
-            # -------------------------
-            result_match = re.search(r"([\d]+\.\d+|[\d]+)", section)
-            result = float(result_match.group(1)) if result_match else None
-
-            # -------------------------
-            # 2. Extract PEER DATA
-            # -------------------------
-            peer_match = re.search(
-                r"Your Peer\s+\d+\s+([\d\.]+)\s+([\d\.]+).*?([\-\d\.]+)\s+([\-\d\.]+)",
-                section,
-                re.DOTALL | re.IGNORECASE
-            )
-
-            peer_mean = float(peer_match.group(1)) if peer_match else None
-            peer_sd = float(peer_match.group(2)) if peer_match else None
-            rmz = float(peer_match.group(4)) if peer_match else None
-
-            # -------------------------
-            # 3. Extract ANALYTE (look BEFORE this section)
-            # -------------------------
-            prev_text = sections[sections.index(section)-1]
-
-            lines = prev_text.strip().split("\n")
-            lines = [l.strip() for l in lines if l.strip()]
-
-            analyte = None
-            for line in reversed(lines[-10:]):  # look last few lines
-                if (
-                    len(line) < 50
-                    and not re.search(r"\d", line)
-                    and "report" not in line.lower()
-                    and "configuration" not in line.lower()
-                ):
-                    analyte = line
-                    break
-
-            # -------------------------
-            # 4. Save record
-            # -------------------------
-            if analyte and result:
-                records.append({
-                    "Analyte": analyte,
-                    "Result": result,
-                    "Peer Mean": peer_mean,
-                    "Peer SD": peer_sd,
-                    "RMZ": rmz
-                })
-
-        except:
-            continue
-
-    return records
-
 
 def extract_all(file):
     records = []
