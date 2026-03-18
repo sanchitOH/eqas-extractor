@@ -81,7 +81,6 @@ def parse_summary_page(text, lab_info):
                 "Unit":      unit.strip(),
                 "Result":    float(result),
                 "Peer Mean": float(mean),
-                "Peer SD":   None,          # filled below from individual report pages
                 "RMZ":       float(rmz),
             })
     return records
@@ -223,8 +222,7 @@ def extract_all(file):
                 detail["analyte"] = detail["analyte"].replace("\u2212", "-").replace("\u2013", "-")
                 key = detail["analyte"].lower()
                 if key in base_records:
-                    # Enrich existing record with Peer SD (and Unit if missing)
-                    base_records[key]["Peer SD"] = detail["peer_sd"]
+                    pass  # summary record already complete
                 else:
                     # No summary page found yet — create record from detail
                     base_records[key] = {
@@ -235,7 +233,6 @@ def extract_all(file):
                         "Unit":      None,
                         "Result":    detail["result"],
                         "Peer Mean": detail["peer_mean"],
-                        "Peer SD":   detail["peer_sd"],
                         "RMZ":       detail["rmz"],
                     }
 
@@ -249,7 +246,7 @@ def extract_all(file):
         return pd.DataFrame()
 
     cols = ["Lab", "Cycle", "Sample", "Analyte", "Unit",
-            "Result", "Peer Mean", "Peer SD", "RMZ"]
+            "Result", "Peer Mean", "RMZ"]
     return pd.DataFrame(list(base_records.values()))[cols]
 
 
@@ -280,7 +277,11 @@ def upload_to_gsheets(df):
     for _, row in df.iterrows():
         key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]), row["Analyte"])
         if key not in existing_set:
-            new_rows.append([str(v) if v is not None else "" for v in row.tolist()])
+            new_rows.append([
+                    v if isinstance(v, (int, float)) and v == v
+                    else ("" if (v is None or (isinstance(v, float) and v != v)) else str(v))
+                    for v in row.tolist()
+                ])
 
     for row in new_rows:
         sheet.append_row(row)
