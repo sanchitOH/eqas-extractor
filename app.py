@@ -274,7 +274,7 @@ def upload_to_gsheets(df):
     )
 
     if not existing:
-        sheet.append_row(df.columns.tolist())
+        sheet.append_row(df.columns.tolist(), value_input_option='RAW')
 
     new_rows = []
     for _, row in df.iterrows():
@@ -284,7 +284,7 @@ def upload_to_gsheets(df):
             new_rows.append([_cast(v) for v in row.tolist()])
 
     for row in new_rows:
-        sheet.append_row(row)
+        sheet.append_row(row, value_input_option='RAW')
 
     return len(new_rows)
 
