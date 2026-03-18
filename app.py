@@ -81,6 +81,7 @@ def parse_summary_page(text, lab_info):
                 "Unit":      unit.strip(),
                 "Result":    float(result),
                 "Peer Mean": float(mean),
+                "Z-score":   float(zscore),
                 "RMZ":       float(rmz),
             })
     return records
@@ -167,11 +168,12 @@ def parse_analyte_page(text):
 
     # ── Your Peer row ─────────────────────────────────────────────────────────
     # "Your Peer  N  Mean  SD  CV  U¹  Z-score  RMZ  %Dev"
-    peer_mean = peer_sd = rmz = None
+    peer_mean = peer_sd = zscore = rmz = None
     peer_m = PEER_ROW.search(text)
     if peer_m:
         peer_mean = float(peer_m.group(2))
         peer_sd   = float(peer_m.group(3))
+        zscore    = float(peer_m.group(6))
         rmz       = float(peer_m.group(7))
 
     if result is None:
@@ -181,7 +183,7 @@ def parse_analyte_page(text):
         "analyte":   analyte,
         "result":    result,
         "peer_mean": peer_mean,
-        "peer_sd":   peer_sd,
+        "zscore":    zscore,
         "rmz":       rmz,
     }
 
@@ -233,6 +235,7 @@ def extract_all(file):
                         "Unit":      None,
                         "Result":    detail["result"],
                         "Peer Mean": detail["peer_mean"],
+                        "Z-score":   detail["zscore"],
                         "RMZ":       detail["rmz"],
                     }
 
@@ -246,7 +249,7 @@ def extract_all(file):
         return pd.DataFrame()
 
     cols = ["Lab", "Cycle", "Sample", "Analyte", "Unit",
-            "Result", "Peer Mean", "RMZ"]
+            "Result", "Peer Mean", "Z-score", "RMZ"]
     return pd.DataFrame(list(base_records.values()))[cols]
 
 
@@ -273,15 +276,26 @@ def upload_to_gsheets(df):
     if not existing:
         sheet.append_row(df.columns.tolist())
 
+    def _cast(v):
+        """Send numbers as numbers, empty for None/NaN, plain str otherwise."""
+        if v is None:
+            return ""
+        if isinstance(v, float) and v != v:   # NaN check
+            return ""
+        if isinstance(v, (int, float)):
+            return v
+        # Numeric-looking strings (Lab, Cycle, Sample) → int so Sheets stores as number
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            pass
+        return str(v)
+
     new_rows = []
     for _, row in df.iterrows():
         key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]), row["Analyte"])
         if key not in existing_set:
-            new_rows.append([
-                    v if isinstance(v, (int, float)) and v == v
-                    else ("" if (v is None or (isinstance(v, float) and v != v)) else str(v))
-                    for v in row.tolist()
-                ])
+            new_rows.append([_cast(v) for v in row.tolist()])
 
     for row in new_rows:
         sheet.append_row(row)
