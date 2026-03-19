@@ -252,18 +252,11 @@ def _cast(v):
     s = str(v).strip()
     if s.lstrip("-").isdigit():            # purely integer string → int
         return int(s)
-    # Reformat "DD-Mon-YY" or "DD Mon YY" dates so no Sheets locale
-    # can interpret them as dates → store as plain text, never a date cell
+    # Reformat "DD Mon YY" dates (e.g. "29 Sep 25") to "29-Sep-25"
+    # so Google Sheets does not auto-interpret them as dates
     import re as _re
-    dm = _re.match(
-        r"^(\d{1,2})[\s\-](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s\-](\d{2,4})$",
-        s, _re.IGNORECASE)
-    if dm:
-        d, mon, y = dm.group(1), dm.group(2).capitalize(), dm.group(3)
-        # Zero-pad day, expand 2-digit year, reorder to Mon-DD-YYYY
-        # e.g. "29-Oct-25" → "Oct-29-2025"  (unrecognisable as a date in Sheets)
-        yr = (2000 + int(y)) if len(y) == 2 else int(y)
-        return f"{mon}-{int(d):02d}-{yr}"
+    if _re.match(r"^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$", s):
+        return s.replace(" ", "-")
     return s                               # text stays as text — no backtick risk
 
 
@@ -286,8 +279,7 @@ def upload_to_gsheets(df):
     )
 
     if not existing:
-        # Write header row — RAW so column names are stored as plain text
-        sheet.append_rows([df.columns.tolist()], value_input_option="RAW")
+        sheet.append_row(df.columns.tolist(), value_input_option='RAW')
 
     new_rows = []
     for _, row in df.iterrows():
@@ -296,10 +288,8 @@ def upload_to_gsheets(df):
         if key not in existing_set:
             new_rows.append([_cast(v) for v in row.tolist()])
 
-    if new_rows:
-        # append_rows (plural) correctly respects value_input_option in gspread 6.x
-        # RAW = store exactly what we send, no date/number interpretation by Sheets
-        sheet.append_rows(new_rows, value_input_option="RAW")
+    for row in new_rows:
+        sheet.append_row(row, value_input_option='RAW')
 
     return len(new_rows)
 
