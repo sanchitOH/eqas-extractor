@@ -266,7 +266,7 @@ def _cast(v):
                      "Nov":"11","Dec":"12"}
         mm = month_map.get(mon, mon)
         yy = y[-2:]  # always 2-digit year
-        return f"{int(d):02d}-{mon}-{yy}"
+        return f"{int(d):02d}-{mm}-{yy}"
     return s                               # text stays as text — no backtick risk
 
 
@@ -280,6 +280,32 @@ def _get_or_create_sheet(spreadsheet, lab_id):
         return ws
 
 
+def _upload_to_sheet(ws, df, headers):
+    """Append non-duplicate rows from df to ws. Returns count of rows added."""
+    existing = ws.get_all_records()
+
+    if not existing:
+        ws.append_rows([headers], value_input_option="RAW")
+
+    existing_set = set(
+        (str(r.get("Lab", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
+         str(r.get("Sample Date", "")), str(r.get("Lot No", "")), r.get("Analyte", ""))
+        for r in existing
+    )
+
+    new_rows = []
+    for _, row in df.iterrows():
+        key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]),
+               str(row["Sample Date"]), str(row["Lot No"]), row["Analyte"])
+        if key not in existing_set:
+            new_rows.append([_cast(v) for v in row.tolist()])
+
+    if new_rows:
+        ws.append_rows(new_rows, value_input_option="RAW")
+
+    return len(new_rows)
+
+
 def upload_to_gsheets(df):
     scope = [
         "https://spreadsheets.google.com/feeds",
@@ -288,37 +314,19 @@ def upload_to_gsheets(df):
     creds  = ServiceAccountCredentials.from_json_keyfile_dict(
         st.secrets["gcp_service_account"], scope
     )
-    client       = gspread.authorize(creds)
-    spreadsheet  = client.open("EQAS Master Dashboard")
-    headers      = df.columns.tolist()
-    total_added  = 0
+    client      = gspread.authorize(creds)
+    spreadsheet = client.open("EQAS Master Dashboard")
+    headers     = df.columns.tolist()
+    total_added = 0
 
-    # Process each lab separately into its own tab
+    # ── 1. Main sheet — all labs combined ────────────────────────────
+    main_ws = _get_or_create_sheet(spreadsheet, "Main")
+    total_added += _upload_to_sheet(main_ws, df, headers)
+
+    # ── 2. Per-lab sheets ─────────────────────────────────────────────
     for lab_id, lab_df in df.groupby("Lab"):
-        ws = _get_or_create_sheet(spreadsheet, lab_id)
-
-        existing = ws.get_all_records()
-
-        # Write header if sheet is empty
-        if not existing:
-            ws.append_rows([headers], value_input_option="RAW")
-
-        existing_set = set(
-            (str(r.get("Lab", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
-             str(r.get("Sample Date", "")), str(r.get("Lot No", "")), r.get("Analyte", ""))
-            for r in existing
-        )
-
-        new_rows = []
-        for _, row in lab_df.iterrows():
-            key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]),
-                   str(row["Sample Date"]), str(row["Lot No"]), row["Analyte"])
-            if key not in existing_set:
-                new_rows.append([_cast(v) for v in row.tolist()])
-
-        if new_rows:
-            ws.append_rows(new_rows, value_input_option="RAW")
-            total_added += len(new_rows)
+        lab_ws = _get_or_create_sheet(spreadsheet, lab_id)
+        _upload_to_sheet(lab_ws, lab_df, headers)
 
     return total_added
 
