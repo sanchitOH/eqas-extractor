@@ -252,12 +252,32 @@ def _cast(v):
     s = str(v).strip()
     if s.lstrip("-").isdigit():            # purely integer string → int
         return int(s)
-    # Reformat "DD Mon YY" dates (e.g. "29 Sep 25") to "29-Sep-25"
-    # so Google Sheets does not auto-interpret them as dates
+    # Reformat "DD-Mon-YY" or "DD Mon YY" dates so no Sheets locale
+    # can interpret them as dates → store as plain text, never a date cell
     import re as _re
-    if _re.match(r"^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$", s):
-        return s.replace(" ", "-")
+    dm = _re.match(
+        r"^(\d{1,2})[\s\-](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s\-](\d{2,4})$",
+        s, _re.IGNORECASE)
+    if dm:
+        d, mon, y = dm.group(1), dm.group(2).capitalize(), dm.group(3)
+        # Format as DD-MM-YY (numeric month) so Sheets stores as plain text
+        month_map = {"Jan":"01","Feb":"02","Mar":"03","Apr":"04","May":"05",
+                     "Jun":"06","Jul":"07","Aug":"08","Sep":"09","Oct":"10",
+                     "Nov":"11","Dec":"12"}
+        mm = month_map.get(mon, mon)
+        yy = y[-2:]  # always 2-digit year
+        return f"{int(d):02d}-{mon}-{yy}"
     return s                               # text stays as text — no backtick risk
+
+
+def _get_or_create_sheet(spreadsheet, lab_id):
+    """Return the worksheet for this lab, creating it with a header if new."""
+    tab_name = str(lab_id)
+    try:
+        return spreadsheet.worksheet(tab_name)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=20)
+        return ws
 
 
 def upload_to_gsheets(df):
@@ -268,30 +288,39 @@ def upload_to_gsheets(df):
     creds  = ServiceAccountCredentials.from_json_keyfile_dict(
         st.secrets["gcp_service_account"], scope
     )
-    client = gspread.authorize(creds)
-    sheet  = client.open("EQAS Master Dashboard").sheet1
+    client       = gspread.authorize(creds)
+    spreadsheet  = client.open("EQAS Master Dashboard")
+    headers      = df.columns.tolist()
+    total_added  = 0
 
-    existing     = sheet.get_all_records()
-    existing_set = set(
-        (str(r.get("Lab", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
-         str(r.get("Sample Date", "")), str(r.get("Lot No", "")), r.get("Analyte", ""))
-        for r in existing
-    )
+    # Process each lab separately into its own tab
+    for lab_id, lab_df in df.groupby("Lab"):
+        ws = _get_or_create_sheet(spreadsheet, lab_id)
 
-    if not existing:
-        sheet.append_row(df.columns.tolist(), value_input_option='RAW')
+        existing = ws.get_all_records()
 
-    new_rows = []
-    for _, row in df.iterrows():
-        key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]),
-               str(row["Sample Date"]), str(row["Lot No"]), row["Analyte"])
-        if key not in existing_set:
-            new_rows.append([_cast(v) for v in row.tolist()])
+        # Write header if sheet is empty
+        if not existing:
+            ws.append_rows([headers], value_input_option="RAW")
 
-    for row in new_rows:
-        sheet.append_row(row, value_input_option='RAW')
+        existing_set = set(
+            (str(r.get("Lab", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
+             str(r.get("Sample Date", "")), str(r.get("Lot No", "")), r.get("Analyte", ""))
+            for r in existing
+        )
 
-    return len(new_rows)
+        new_rows = []
+        for _, row in lab_df.iterrows():
+            key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]),
+                   str(row["Sample Date"]), str(row["Lot No"]), row["Analyte"])
+            if key not in existing_set:
+                new_rows.append([_cast(v) for v in row.tolist()])
+
+        if new_rows:
+            ws.append_rows(new_rows, value_input_option="RAW")
+            total_added += len(new_rows)
+
+    return total_added
 
 
 # ─────────────────────────────────────────────
