@@ -252,11 +252,6 @@ def _cast(v):
     s = str(v).strip()
     if s.lstrip("-").isdigit():            # purely integer string → int
         return int(s)
-    # Reformat "DD Mon YY" dates (e.g. "29 Sep 25") to "29-Sep-25"
-    # so Google Sheets does not auto-interpret them as dates
-    import re as _re
-    if _re.match(r"^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$", s):
-        return s.replace(" ", "-")
     return s                               # text stays as text — no backtick risk
 
 
@@ -279,7 +274,8 @@ def upload_to_gsheets(df):
     )
 
     if not existing:
-        sheet.append_row(df.columns.tolist(), value_input_option='RAW')
+        # Write header row — RAW so column names are stored as plain text
+        sheet.append_rows([df.columns.tolist()], value_input_option="RAW")
 
     new_rows = []
     for _, row in df.iterrows():
@@ -288,8 +284,10 @@ def upload_to_gsheets(df):
         if key not in existing_set:
             new_rows.append([_cast(v) for v in row.tolist()])
 
-    for row in new_rows:
-        sheet.append_row(row, value_input_option='RAW')
+    if new_rows:
+        # append_rows (plural) correctly respects value_input_option in gspread 6.x
+        # RAW = store exactly what we send, no date/number interpretation by Sheets
+        sheet.append_rows(new_rows, value_input_option="RAW")
 
     return len(new_rows)
 
