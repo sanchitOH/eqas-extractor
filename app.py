@@ -252,6 +252,11 @@ def _cast(v):
     s = str(v).strip()
     if s.lstrip("-").isdigit():            # purely integer string → int
         return int(s)
+    # Reformat "DD Mon YY" dates (e.g. "29 Sep 25") to "29-Sep-25"
+    # so Google Sheets does not auto-interpret them as dates
+    import re as _re
+    if _re.match(r"^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$", s):
+        return s.replace(" ", "-")
     return s                               # text stays as text — no backtick risk
 
 
