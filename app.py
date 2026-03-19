@@ -266,7 +266,7 @@ def _cast(v):
                      "Nov":"11","Dec":"12"}
         mm = month_map.get(mon, mon)
         yy = y[-2:]  # always 2-digit year
-        return f"{int(d):02d}-{mm}-{yy}"
+        return f"{int(d):02d}-{mon}-{yy}"
     return s                               # text stays as text — no backtick risk
 
 
