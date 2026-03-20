@@ -36,7 +36,7 @@ def extract_lab_info(text):
         program = re.search(r"^(.+?Program)(?:\s*\([^)]+\))?(?:\s+Cycle|\s*$)",
                             text, re.IGNORECASE | re.MULTILINE)
     return {
-        "Lab":         lab.group(1)              if lab     else None,
+        "Lab ID":      lab.group(1)              if lab     else None,
         "Cycle":       cycle.group(1)            if cycle   else None,
         "Sample":      sample.group(1)           if sample  else None,
         "Sample Date": sdate.group(1)            if sdate   else None,
@@ -81,7 +81,7 @@ def parse_summary_page(text, lab_info):
         if m:
             analyte, unit, result, mean, zscore, rmz = m.groups()
             records.append({
-                "Lab":         lab_info["Lab"],
+                "Lab ID":      lab_info["Lab ID"],
                 "Cycle":       lab_info["Cycle"],
                 "Sample":      lab_info["Sample"],
                 "Sample Date": lab_info.get("Sample Date"),
@@ -158,7 +158,7 @@ def parse_uria_summary_page(text, lab_info):
         if m:
             analyte, result, n, consensus = m.groups()
             records.append({
-                "Lab":         lab_info["Lab"],
+                "Lab ID":      lab_info["Lab ID"],
                 "Cycle":       lab_info["Cycle"],
                 "Sample":      lab_info["Sample"],
                 "Sample Date": lab_info.get("Sample Date"),
@@ -253,7 +253,7 @@ def parse_analyte_page(text):
 # ─────────────────────────────────────────────
 def extract_all(file):
     base_records = {}
-    lab_info = {"Lab": None, "Cycle": None, "Sample": None, "Sample Date": None, "Lot No": None, "Program": None}
+    lab_info = {"Lab ID": None, "Cycle": None, "Sample": None, "Sample Date": None, "Lot No": None, "Program": None}
 
     # Auto-detect PDF format on first pass
     uria_format = False
@@ -271,7 +271,7 @@ def extract_all(file):
                 continue
 
             info = extract_lab_info(text)
-            for k in ("Lab", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
+            for k in ("Lab ID", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
                 if info[k] and not lab_info[k]:
                     lab_info[k] = info[k]
 
@@ -297,7 +297,7 @@ def extract_all(file):
                         base_records[key]["Z-score"] = detail["zscore"]
                     else:
                         base_records[key] = {
-                            "Lab":         lab_info["Lab"],
+                            "Lab ID":      lab_info["Lab ID"],
                             "Cycle":       lab_info["Cycle"],
                             "Sample":      lab_info["Sample"],
                             "Sample Date": lab_info.get("Sample Date"),
@@ -325,7 +325,7 @@ def extract_all(file):
                                 break
                     if key not in base_records:
                         base_records[key] = {
-                            "Lab":         lab_info["Lab"],
+                            "Lab ID":      lab_info["Lab ID"],
                             "Cycle":       lab_info["Cycle"],
                             "Sample":      lab_info["Sample"],
                             "Sample Date": lab_info.get("Sample Date"),
@@ -340,14 +340,14 @@ def extract_all(file):
                         }
 
     for rec in base_records.values():
-        for k in ("Lab", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
+        for k in ("Lab ID", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
             if not rec.get(k):
                 rec[k] = lab_info.get(k)
 
     if not base_records:
         return pd.DataFrame()
 
-    cols = ["Lab", "Cycle", "Sample", "Sample Date", "Lot No", "Program",
+    cols = ["Lab ID", "Cycle", "Sample", "Sample Date", "Lot No", "Program",
             "Analyte", "Unit", "Result", "Peer Mean", "Z-score", "RMZ"]
     return pd.DataFrame(list(base_records.values()))[cols]
 
@@ -355,41 +355,60 @@ def extract_all(file):
 # ─────────────────────────────────────────────
 # GOOGLE SHEETS UPLOAD
 # ─────────────────────────────────────────────
-def _cast(v):
+# Columns stored as plain text even if they look numeric
+_TEXT_COLS = {"Lab ID", "Sample Date"}
+# Columns stored as integers
+_INT_COLS  = {"Cycle", "Sample", "Lot No"}
+
+def _cast(v, col=None):
     """
-    Convert a value to the type gspread should store:
-    - None / NaN          → empty string (no backtick)
-    - int / float         → number as-is
-    - purely numeric str  → int  (Lab, Cycle, Sample, Lot No — prevents backtick)
-    - everything else     → str  (Analyte, Unit, Program, Sample Date)
-    gspread only prepends a backtick when it sends a str that looks numeric,
-    so casting those to int eliminates the issue completely.
+    Column-aware value converter for gspread upload:
+    - None / NaN                → ""
+    - float / int               → number
+    - Lab ID                    → plain str  (text, not a number)
+    - Sample Date               → "DD Mon YY" with single spaces
+    - Cycle / Sample / Lot No   → int
+    - everything else           → str
     """
+    import re as _re
+
     if v is None:
         return ""
-    if isinstance(v, float) and v != v:   # NaN
+    if isinstance(v, float) and v != v:
         return ""
     if isinstance(v, (int, float)):
         return v
+
     s = str(v).strip()
-    if s.lstrip("-").isdigit():            # purely integer string → int
-        return int(s)
-    # Reformat "DD-Mon-YY" or "DD Mon YY" dates so no Sheets locale
-    # can interpret them as dates → store as plain text, never a date cell
-    import re as _re
+
+    # ── Sample Date → Sheets date serial (int) so Sheets stores a real date
+    # You can then format the column in any date format you like in the sheet
+    from datetime import date as _date
+    _MONTHS = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
+               "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
     dm = _re.match(
         r"^(\d{1,2})[\s\-](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s\-](\d{2,4})$",
         s, _re.IGNORECASE)
     if dm:
-        d, mon, y = dm.group(1), dm.group(2).capitalize(), dm.group(3)
-        # Format as DD-MM-YY (numeric month) so Sheets stores as plain text
-        month_map = {"Jan":"01","Feb":"02","Mar":"03","Apr":"04","May":"05",
-                     "Jun":"06","Jul":"07","Aug":"08","Sep":"09","Oct":"10",
-                     "Nov":"11","Dec":"12"}
-        mm = month_map.get(mon, mon)
-        yy = y[-2:]  # always 2-digit year
-        return f"{int(d):02d}-{mm}-{yy}"
-    return s                               # text stays as text — no backtick risk
+        try:
+            d   = int(dm.group(1))
+            mon = dm.group(2).capitalize()
+            y   = dm.group(3)
+            yr  = (2000 + int(y)) if len(y) == 2 else int(y)
+            dt  = _date(yr, _MONTHS[mon], d)
+            return (dt - _date(1899, 12, 30)).days  # serial → real Sheets date
+        except (KeyError, ValueError):
+            return s  # fallback to string
+
+    # ── Lab ID → always plain text string ───────────────────────────────
+    if col == "Lab ID":
+        return s
+
+    # ── Numeric strings for known int columns → int ──────────────────────
+    if s.lstrip("-").isdigit() and col in _INT_COLS:
+        return int(s)
+
+    return s
 
 
 def _get_or_create_sheet(spreadsheet, lab_id):
@@ -410,17 +429,17 @@ def _upload_to_sheet(ws, df, headers):
         ws.append_rows([headers], value_input_option="RAW")
 
     existing_set = set(
-        (str(r.get("Lab", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
+        (str(r.get("Lab ID", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
          str(r.get("Sample Date", "")), str(r.get("Lot No", "")), r.get("Analyte", ""))
         for r in existing
     )
 
     new_rows = []
     for _, row in df.iterrows():
-        key = (str(row["Lab"]), str(row["Cycle"]), str(row["Sample"]),
+        key = (str(row["Lab ID"]), str(row["Cycle"]), str(row["Sample"]),
                str(row["Sample Date"]), str(row["Lot No"]), row["Analyte"])
         if key not in existing_set:
-            new_rows.append([_cast(v) for v in row.tolist()])
+            new_rows.append([_cast(v, col) for col, v in zip(df.columns, row.tolist())])
 
     if new_rows:
         ws.append_rows(new_rows, value_input_option="RAW")
@@ -446,7 +465,7 @@ def upload_to_gsheets(df):
     total_added += _upload_to_sheet(main_ws, df, headers)
 
     # ── 2. Per-lab sheets ─────────────────────────────────────────────
-    for lab_id, lab_df in df.groupby("Lab"):
+    for lab_id, lab_df in df.groupby("Lab ID"):
         lab_ws = _get_or_create_sheet(spreadsheet, lab_id)
         _upload_to_sheet(lab_ws, lab_df, headers)
 
