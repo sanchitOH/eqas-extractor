@@ -124,6 +124,90 @@ SKIP_TITLES = {
     "data on file report", "exceptions", "sample comments",
 }
 
+# ─────────────────────────────────────────────
+# URINALYSIS FORMAT DETECTION & PARSERS
+# Urinalysis PDFs use a consensus-based qualitative
+# format instead of numeric peer stats.
+# Summary page columns: Analyte | Result | N | Consensus%
+# Detail pages contain: "Your result: Neg. Within Consensus"
+# ─────────────────────────────────────────────
+URIA_SUMMARY_ROW = re.compile(
+    r"^(.+?)\s+"
+    r"(Neg\.|norm\.|[\d\.]+|\-|\+)\s+"   # qualitative or numeric result
+    r"(\d+)\s+"                           # N (peer lab count)
+    r"(\d+)%$",                           # consensus %
+    re.IGNORECASE
+)
+
+URIA_RESULT = re.compile(
+    r"Your\s+result:\s+(.+?)\s+"
+    r"(Within Consensus|Acceptable|Outside Consensus|No Consensus)",
+    re.IGNORECASE
+)
+
+def is_urinalysis(text):
+    """Detect if a page belongs to a urinalysis-format PDF."""
+    return bool(re.search(r"urinalysis\s+program", text, re.IGNORECASE))
+
+def parse_uria_summary_page(text, lab_info):
+    """Parse the qualitative summary page of a urinalysis PDF."""
+    text = norm(text)
+    records = []
+    for line in text.split("\n"):
+        m = URIA_SUMMARY_ROW.match(line.strip())
+        if m:
+            analyte, result, n, consensus = m.groups()
+            records.append({
+                "Lab":         lab_info["Lab"],
+                "Cycle":       lab_info["Cycle"],
+                "Sample":      lab_info["Sample"],
+                "Sample Date": lab_info.get("Sample Date"),
+                "Lot No":      lab_info.get("Lot No"),
+                "Program":     lab_info.get("Program"),
+                "Analyte":     analyte.strip(),
+                "Unit":        None,
+                "Result":      result.strip(),
+                "Peer Mean":   None,
+                "Z-score":     None,   # filled from detail pages
+                "RMZ":         None,
+            })
+    return records
+
+def parse_uria_analyte_page(text):
+    """
+    Parse a single urinalysis analyte detail page.
+    Extracts analyte name, your result, and consensus status.
+    Consensus status maps to Z-score column:
+      Within Consensus   → Within Consensus
+      Acceptable         → Acceptable
+      Outside Consensus  → Outside Consensus
+      No Consensus       → No Consensus
+    """
+    text = norm(text)
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+    # Analyte name is first line ending with "Report"
+    analyte = None
+    for line in lines[:3]:
+        if "report" in line.lower() and len(line) < 80:
+            candidate = re.sub(r"\s*report\s*$", "", line, flags=re.IGNORECASE).strip()
+            if candidate.lower() not in SKIP_TITLES and len(candidate) > 1:
+                analyte = candidate
+            break
+    if not analyte:
+        return None
+
+    # "Your result: Neg. Within Consensus"
+    m = URIA_RESULT.search(text)
+    if not m:
+        return None
+
+    return {
+        "analyte": analyte,
+        "result":  m.group(1).strip(),
+        "zscore":  m.group(2).strip(),   # consensus status as Z-score
+    }
+
 def parse_analyte_page(text):
     text = norm(text)
     lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -171,6 +255,15 @@ def extract_all(file):
     base_records = {}
     lab_info = {"Lab": None, "Cycle": None, "Sample": None, "Sample Date": None, "Lot No": None, "Program": None}
 
+    # Auto-detect PDF format on first pass
+    uria_format = False
+    with pdfplumber.open(file) as pdf:
+        for pg in pdf.pages[:4]:
+            t = pg.extract_text() or ""
+            if is_urinalysis(t):
+                uria_format = True
+                break
+
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
@@ -183,39 +276,68 @@ def extract_all(file):
                     lab_info[k] = info[k]
 
             if "sample summary report" in text.lower():
-                for rec in parse_summary_page(text, lab_info):
-                    rec["Analyte"] = norm(rec["Analyte"])
-                    base_records[rec["Analyte"].lower()] = rec
+                # ── Urinalysis format ──────────────────────────────────────
+                if uria_format:
+                    for rec in parse_uria_summary_page(text, lab_info):
+                        rec["Analyte"] = norm(rec["Analyte"])
+                        base_records[rec["Analyte"].lower()] = rec
+                # ── Standard quantitative format ───────────────────────────
+                else:
+                    for rec in parse_summary_page(text, lab_info):
+                        rec["Analyte"] = norm(rec["Analyte"])
+                        base_records[rec["Analyte"].lower()] = rec
 
-            detail = parse_analyte_page(text)
-            if detail:
-                detail["analyte"] = norm(detail["analyte"])
-                key = detail["analyte"].lower()
-                # Also check if any summary key is a prefix of this detail name
-                # e.g. "microalbumin/urine alb" matches "microalbumin/urine albumin"
-                if key not in base_records:
-                    for existing_key in list(base_records.keys()):
-                        if key.startswith(existing_key) or existing_key.startswith(key):
-                            # Upgrade the truncated name to the full name from the detail page
-                            rec = base_records.pop(existing_key)
-                            rec["Analyte"] = detail["analyte"]
-                            base_records[key] = rec
-                            break
-                if key not in base_records:
-                    base_records[key] = {
-                        "Lab":         lab_info["Lab"],
-                        "Cycle":       lab_info["Cycle"],
-                        "Sample":      lab_info["Sample"],
-                        "Sample Date": lab_info.get("Sample Date"),
-                        "Lot No":      lab_info.get("Lot No"),
-                        "Program":     lab_info.get("Program"),
-                        "Analyte":     detail["analyte"],
-                        "Unit":        None,
-                        "Result":      detail["result"],
-                        "Peer Mean":   detail["peer_mean"],
-                        "Z-score":     detail["zscore"],
-                        "RMZ":         detail["rmz"],
-                    }
+            # ── Detail pages: enrich with consensus status or Peer SD ──────
+            if uria_format:
+                detail = parse_uria_analyte_page(text)
+                if detail:
+                    detail["analyte"] = norm(detail["analyte"])
+                    key = detail["analyte"].lower()
+                    if key in base_records:
+                        base_records[key]["Z-score"] = detail["zscore"]
+                    else:
+                        base_records[key] = {
+                            "Lab":         lab_info["Lab"],
+                            "Cycle":       lab_info["Cycle"],
+                            "Sample":      lab_info["Sample"],
+                            "Sample Date": lab_info.get("Sample Date"),
+                            "Lot No":      lab_info.get("Lot No"),
+                            "Program":     lab_info.get("Program"),
+                            "Analyte":     detail["analyte"],
+                            "Unit":        None,
+                            "Result":      detail["result"],
+                            "Peer Mean":   None,
+                            "Z-score":     detail["zscore"],
+                            "RMZ":         None,
+                        }
+            else:
+                detail = parse_analyte_page(text)
+                if detail:
+                    detail["analyte"] = norm(detail["analyte"])
+                    key = detail["analyte"].lower()
+                    # Prefix match: merge truncated summary name with full detail name
+                    if key not in base_records:
+                        for existing_key in list(base_records.keys()):
+                            if key.startswith(existing_key) or existing_key.startswith(key):
+                                rec = base_records.pop(existing_key)
+                                rec["Analyte"] = detail["analyte"]
+                                base_records[key] = rec
+                                break
+                    if key not in base_records:
+                        base_records[key] = {
+                            "Lab":         lab_info["Lab"],
+                            "Cycle":       lab_info["Cycle"],
+                            "Sample":      lab_info["Sample"],
+                            "Sample Date": lab_info.get("Sample Date"),
+                            "Lot No":      lab_info.get("Lot No"),
+                            "Program":     lab_info.get("Program"),
+                            "Analyte":     detail["analyte"],
+                            "Unit":        None,
+                            "Result":      detail["result"],
+                            "Peer Mean":   detail["peer_mean"],
+                            "Z-score":     detail["zscore"],
+                            "RMZ":         detail["rmz"],
+                        }
 
     for rec in base_records.values():
         for k in ("Lab", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
@@ -266,7 +388,7 @@ def _cast(v):
                      "Nov":"11","Dec":"12"}
         mm = month_map.get(mon, mon)
         yy = y[-2:]  # always 2-digit year
-        return f"{int(d):02d}-{mon}-{yy}"
+        return f"{int(d):02d}-{mm}-{yy}"
     return s                               # text stays as text — no backtick risk
 
 
