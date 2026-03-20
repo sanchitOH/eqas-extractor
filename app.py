@@ -356,7 +356,7 @@ def extract_all(file):
 # GOOGLE SHEETS UPLOAD
 # ─────────────────────────────────────────────
 # Columns stored as integers (sent as int → no backtick in Sheets)
-_INT_COLS  = {"Lab", "Cycle", "Sample", "Lot No"}
+_INT_COLS  = {"Lab ID", "Cycle", "Sample", "Lot No"}
 
 def _cast(v, col=None):
     """
