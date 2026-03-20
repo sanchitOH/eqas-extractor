@@ -355,20 +355,17 @@ def extract_all(file):
 # ─────────────────────────────────────────────
 # GOOGLE SHEETS UPLOAD
 # ─────────────────────────────────────────────
-# Columns stored as plain text even if they look numeric
-_TEXT_COLS = {"Lab ID", "Sample Date"}
-# Columns stored as integers
-_INT_COLS  = {"Cycle", "Sample", "Lot No"}
+# Columns stored as integers (sent as int → no backtick in Sheets)
+_INT_COLS  = {"Lab", "Cycle", "Sample", "Lot No"}
 
 def _cast(v, col=None):
     """
     Column-aware value converter for gspread upload:
-    - None / NaN                → ""
-    - float / int               → number
-    - Lab ID                    → plain str  (text, not a number)
-    - Sample Date               → "DD Mon YY" with single spaces
-    - Cycle / Sample / Lot No   → int
-    - everything else           → str
+    - None / NaN                    → ""
+    - float / int                   → number
+    - Sample Date                   → Sheets date serial (int)
+    - Lab / Cycle / Sample / Lot No → int (no backtick)
+    - everything else               → str
     """
     import re as _re
 
@@ -400,11 +397,7 @@ def _cast(v, col=None):
         except (KeyError, ValueError):
             return s  # fallback to string
 
-    # ── Lab ID → always plain text string ───────────────────────────────
-    if col == "Lab ID":
-        return s
-
-    # ── Numeric strings for known int columns → int ──────────────────────
+    # ── Numeric strings for known int columns → int (no backtick) ────────
     if s.lstrip("-").isdigit() and col in _INT_COLS:
         return int(s)
 
