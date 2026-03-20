@@ -40,7 +40,6 @@ def extract_lab_info(text):
         "Cycle":       cycle.group(1)            if cycle   else None,
         "Sample":      sample.group(1)           if sample  else None,
         "Sample Date": sdate.group(1)            if sdate   else None,
-        "Lot No":      lot.group(1)              if lot     else None,
         "Program":     program.group(1).strip()  if program else None,
     }
 
@@ -85,7 +84,6 @@ def parse_summary_page(text, lab_info):
                 "Cycle":       lab_info["Cycle"],
                 "Sample":      lab_info["Sample"],
                 "Sample Date": lab_info.get("Sample Date"),
-                "Lot No":      lab_info.get("Lot No"),
                 "Program":     lab_info.get("Program"),
                 "Analyte":     re.sub(r"\.{2,}$|…$", "", analyte.strip()).strip(),
                 "Unit":        unit.strip(),
@@ -162,7 +160,6 @@ def parse_uria_summary_page(text, lab_info):
                 "Cycle":       lab_info["Cycle"],
                 "Sample":      lab_info["Sample"],
                 "Sample Date": lab_info.get("Sample Date"),
-                "Lot No":      lab_info.get("Lot No"),
                 "Program":     lab_info.get("Program"),
                 "Analyte":     analyte.strip(),
                 "Unit":        None,
@@ -253,7 +250,7 @@ def parse_analyte_page(text):
 # ─────────────────────────────────────────────
 def extract_all(file):
     base_records = {}
-    lab_info = {"Lab ID": None, "Cycle": None, "Sample": None, "Sample Date": None, "Lot No": None, "Program": None}
+    lab_info = {"Lab ID": None, "Cycle": None, "Sample": None, "Sample Date": None, "Program": None}
 
     # Auto-detect PDF format on first pass
     uria_format = False
@@ -271,7 +268,7 @@ def extract_all(file):
                 continue
 
             info = extract_lab_info(text)
-            for k in ("Lab ID", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
+            for k in ("Lab ID", "Cycle", "Sample", "Sample Date", "Program"):
                 if info[k] and not lab_info[k]:
                     lab_info[k] = info[k]
 
@@ -301,8 +298,7 @@ def extract_all(file):
                             "Cycle":       lab_info["Cycle"],
                             "Sample":      lab_info["Sample"],
                             "Sample Date": lab_info.get("Sample Date"),
-                            "Lot No":      lab_info.get("Lot No"),
-                            "Program":     lab_info.get("Program"),
+                                        "Program":     lab_info.get("Program"),
                             "Analyte":     detail["analyte"],
                             "Unit":        None,
                             "Result":      detail["result"],
@@ -329,8 +325,7 @@ def extract_all(file):
                             "Cycle":       lab_info["Cycle"],
                             "Sample":      lab_info["Sample"],
                             "Sample Date": lab_info.get("Sample Date"),
-                            "Lot No":      lab_info.get("Lot No"),
-                            "Program":     lab_info.get("Program"),
+                                        "Program":     lab_info.get("Program"),
                             "Analyte":     detail["analyte"],
                             "Unit":        None,
                             "Result":      detail["result"],
@@ -340,14 +335,14 @@ def extract_all(file):
                         }
 
     for rec in base_records.values():
-        for k in ("Lab ID", "Cycle", "Sample", "Sample Date", "Lot No", "Program"):
+        for k in ("Lab ID", "Cycle", "Sample", "Sample Date", "Program"):
             if not rec.get(k):
                 rec[k] = lab_info.get(k)
 
     if not base_records:
         return pd.DataFrame()
 
-    cols = ["Lab ID", "Cycle", "Sample", "Sample Date", "Lot No", "Program",
+    cols = ["Lab ID", "Cycle", "Sample", "Sample Date", "Program",
             "Analyte", "Unit", "Result", "Peer Mean", "Z-score", "RMZ"]
     return pd.DataFrame(list(base_records.values()))[cols]
 
@@ -356,7 +351,7 @@ def extract_all(file):
 # GOOGLE SHEETS UPLOAD
 # ─────────────────────────────────────────────
 # Columns stored as integers (sent as int → no backtick in Sheets)
-_INT_COLS  = {"Lab ID", "Cycle", "Sample", "Lot No"}
+_INT_COLS  = {"Lab ID", "Cycle", "Sample"}
 
 def _cast(v, col=None):
     """
@@ -364,7 +359,7 @@ def _cast(v, col=None):
     - None / NaN                    → ""
     - float / int                   → number
     - Sample Date                   → Sheets date serial (int)
-    - Lab / Cycle / Sample / Lot No → int (no backtick)
+    - Lab ID / Cycle / Sample → int (no backtick)
     - everything else               → str
     """
     import re as _re
@@ -423,14 +418,14 @@ def _upload_to_sheet(ws, df, headers):
 
     existing_set = set(
         (str(r.get("Lab ID", "")), str(r.get("Cycle", "")), str(r.get("Sample", "")),
-         str(r.get("Sample Date", "")), str(r.get("Lot No", "")), r.get("Analyte", ""))
+         str(r.get("Sample Date", "")), r.get("Analyte", ""))
         for r in existing
     )
 
     new_rows = []
     for _, row in df.iterrows():
         key = (str(row["Lab ID"]), str(row["Cycle"]), str(row["Sample"]),
-               str(row["Sample Date"]), str(row["Lot No"]), row["Analyte"])
+               str(row["Sample Date"]), row["Analyte"])
         if key not in existing_set:
             new_rows.append([_cast(v, col) for col, v in zip(df.columns, row.tolist())])
 
